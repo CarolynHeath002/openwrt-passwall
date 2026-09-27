@@ -76,6 +76,9 @@ function index()
 	entry({"admin", "services", appname, "clear_log"}, call("clear_log")).leaf = true
 	entry({"admin", "services", appname, "index_status"}, call("index_status")).leaf = true
 	entry({"admin", "services", appname, "haproxy_status"}, call("haproxy_status")).leaf = true
+	entry({"admin", "services", appname, "haproxy_batch_add"}, call("haproxy_batch_add")).leaf = true
+	entry({"admin", "services", appname, "haproxy_batch_del"}, call("haproxy_batch_del")).leaf = true
+	entry({"admin", "services", appname, "haproxy_clear_nodes"}, call("haproxy_clear_nodes")).leaf = true
 	entry({"admin", "services", appname, "socks_status"}, call("socks_status")).leaf = true
 	entry({"admin", "services", appname, "connect_status"}, call("connect_status")).leaf = true
 	entry({"admin", "services", appname, "ping_node"}, call("ping_node")).leaf = true
@@ -358,6 +361,77 @@ function haproxy_status()
 	local e = {}
 	e["status"] = luci.sys.call("/bin/busybox top -bn1 | grep -v 'grep' | grep '%s/bin/' | grep haproxy >/dev/null" % appname) == 0
 	http_write_json(e)
+end
+
+-- 批量添加负载均衡节点：ids 为节点 section id 列表（逗号分隔），统一写入端口/权重/主备模式
+function haproxy_batch_add()
+	local ids = http.formvalue("ids") or ""
+	local port = tonumber(http.formvalue("haproxy_port"))
+	local weight = tonumber(http.formvalue("lbweight"))
+	local backup = http.formvalue("backup") == "1" and "1" or "0"
+	if not port or port ~= math.floor(port) or port < 1 or port > 65535
+		or not weight or weight ~= math.floor(weight) or weight < 1 then
+		http_write_json_error({ message = "invalid parameter" })
+		return
+	end
+	local existing = {}
+	uci_foreach("haproxy_config", function(t)
+		if t.lbss then existing[t.lbss] = true end
+	end)
+	local added, skipped = 0, 0
+	for id in ids:gmatch("([^,]+)") do
+		local node = uci_get(id)
+		if node and node[".type"] == "nodes" and not existing[id] then
+			local uid = "haproxy_" .. api.gen_random_char(5)
+			uci:section(c_config, "haproxy_config", uid)
+			uci_set(uid, "enabled", "1")
+			uci_set(uid, "lbss", id)
+			uci_set(uid, "haproxy_port", tostring(port))
+			uci_set(uid, "lbweight", tostring(weight))
+			uci_set(uid, "export", "0")
+			uci_set(uid, "backup", backup)
+			existing[id] = true
+			added = added + 1
+		else
+			skipped = skipped + 1
+		end
+	end
+	if added > 0 then
+		uci_save(true, true)
+	end
+	http_write_json({ added = added, skipped = skipped })
+end
+
+-- 批量删除负载均衡节点：ids 为 haproxy_config section id 列表（逗号分隔）
+function haproxy_batch_del()
+	local ids = http.formvalue("ids") or ""
+	local removed = 0
+	for id in ids:gmatch("([^,]+)") do
+		local t = uci_get(id)
+		if t and t[".type"] == "haproxy_config" then
+			uci_del(id)
+			removed = removed + 1
+		end
+	end
+	if removed > 0 then
+		uci_save(true, true)
+	end
+	http_write_json({ removed = removed })
+end
+
+-- 清空所有负载均衡节点
+function haproxy_clear_nodes()
+	local names = {}
+	uci_foreach("haproxy_config", function(t)
+		names[#names + 1] = t[".name"]
+	end)
+	for _, name in ipairs(names) do
+		uci_del(name)
+	end
+	if #names > 0 then
+		uci_save(true, true)
+	end
+	http_write_json({ removed = #names })
 end
 
 function socks_status()

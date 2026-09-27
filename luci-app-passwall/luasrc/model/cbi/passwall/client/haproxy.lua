@@ -1,5 +1,6 @@
 local api = require "luci.passwall.api"
 local datatypes = api.datatypes
+local json = require "luci.jsonc"
 api.set_default_cbi()
 
 local nodes_table = {}
@@ -179,5 +180,32 @@ o.rmempty = false
 m:appendTemplate("/cbi/sortable", {sectiontype = s.sectiontype})
 
 m:appendTemplate("/haproxy/js")
+
+-- [[ Batch Add Nodes ]]--
+local batch_nodes = {}
+for k, v in ipairs(nodes_table) do
+	batch_nodes[#batch_nodes + 1] = {
+		id = v.id,
+		label = v.remarks,
+		group = (v.group and v.group ~= "") and v.group or translate("default")
+	}
+end
+
+local existing_nodes = {}
+m:foreach("haproxy_config", function(e)
+	if e.lbss and e.lbss ~= "" then
+		existing_nodes[#existing_nodes + 1] = e.lbss
+	end
+end)
+
+local function json_safe(str)
+	-- 防止 JSON 中的 "</script>" 提前终止脚本块（JSON 中 "\/" 合法，等价 "/"）
+	return (str:gsub("</", "<\\/"))
+end
+
+m:appendTemplate("/haproxy/batch_add", {
+	nodes_json = json_safe(json.stringify(batch_nodes) or "[]"),
+	existing_json = json_safe(json.stringify(existing_nodes) or "[]")
+})
 
 return api.return_map(m)

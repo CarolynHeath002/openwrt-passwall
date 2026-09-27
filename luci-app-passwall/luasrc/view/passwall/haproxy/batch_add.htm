@@ -1,0 +1,676 @@
+<%
+--	HAPROXY Load Balancing: batch add / batch delete / clear nodes.
+--	Injected by haproxy.lua via m:appendTemplate("/haproxy/batch_add", {...}):
+--		self.nodes_json    : JSON array of selectable nodes [{id, label, group}]
+--		self.existing_json : JSON array of node ids already used by haproxy_config
+local map = self.map
+local api = map.api
+local appname = map.config
+-%>
+
+<style>
+	body.modal-open {
+		overflow: hidden;
+		pointer-events: none;
+	}
+
+	body.modal-open #haproxy-batch-modal {
+		pointer-events: auto;
+	}
+
+	#haproxy-batch-mask {
+		display: none;
+		position: fixed;
+		left: 0;
+		top: 0;
+		width: 100vw;
+		height: 100vh;
+		background: rgba(0, 0, 0, 0.4);
+		z-index: 999;
+	}
+
+	#haproxy-batch-modal {
+		display: none;
+		position: fixed;
+		left: 50%;
+		top: 50%;
+		transform: translate(-50%, -50%);
+		padding: 14px;
+		border: 1px solid #999;
+		box-shadow: 0 0 12px rgba(0, 0, 0, 0.4);
+		z-index: 1000;
+		width: 92%;
+		max-width: 560px;
+		max-height: 82vh;
+		overflow-y: auto;
+	}
+
+	#haproxy-batch-modal .hb-title {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		font-weight: bold;
+		padding-bottom: 8px;
+		border-bottom: 1px solid #ccc;
+	}
+
+	#haproxy-batch-modal .hb-title input {
+		padding: 2px 8px;
+	}
+
+	#haproxy-batch-modal .hb-search {
+		display: flex;
+		gap: 8px;
+		padding: 10px 0 4px;
+	}
+
+	#haproxy-batch-modal .hb-search input[type="text"] {
+		flex: 1;
+		min-width: 0;
+	}
+
+	#haproxy-batch-modal .hb-list {
+		border: 1px solid #ccc;
+		margin: 8px 0;
+		max-height: 42vh;
+		min-height: 160px;
+		overflow-y: auto;
+	}
+
+	#haproxy-batch-modal .hb-group-head {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 7px 10px;
+		border-bottom: 1px solid #ddd;
+		cursor: default;
+		user-select: none;
+	}
+
+	#haproxy-batch-modal .hb-group-head .hb-chev {
+		display: inline-block;
+		width: 0;
+		height: 0;
+		border-left: 5px solid transparent;
+		border-right: 5px solid transparent;
+		border-top: 6px solid #555;
+		cursor: pointer;
+		transition: transform 0.15s;
+	}
+
+	#haproxy-batch-modal .hb-group-head .hb-chev.closed {
+		transform: rotate(-90deg);
+	}
+
+	#haproxy-batch-modal .hb-group-head b {
+		flex: 1;
+		cursor: pointer;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-weight: 600;
+	}
+
+	#haproxy-batch-modal ul.hb-group-nodes {
+		display: none;
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	#haproxy-batch-modal ul.hb-group-nodes li {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 7px 14px;
+		border-bottom: 1px solid #eee;
+		cursor: pointer;
+		overflow: hidden;
+	}
+
+	#haproxy-batch-modal ul.hb-group-nodes li:hover {
+		background: rgba(32, 150, 209, 0.08);
+	}
+
+	#haproxy-batch-modal ul.hb-group-nodes li span.hb-label {
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	#haproxy-batch-modal ul.hb-group-nodes li.hb-added {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	#haproxy-batch-modal .hb-added-badge {
+		font-size: 11px;
+		background: #d9534f;
+		color: #fff;
+		border-radius: 3px;
+		padding: 1px 6px;
+		white-space: nowrap;
+	}
+
+	#haproxy-batch-modal .hb-params {
+		display: flex;
+		align-items: flex-end;
+		gap: 14px;
+		flex-wrap: wrap;
+		padding: 4px 0 8px;
+	}
+
+	#haproxy-batch-modal .hb-params .hb-param {
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		font-size: 13px;
+	}
+
+	#haproxy-batch-modal .hb-params .hb-param b {
+		font-size: 12px;
+		font-weight: 600;
+	}
+
+	#haproxy-batch-modal .hb-params .hb-param input,
+	#haproxy-batch-modal .hb-params .hb-param select {
+		width: 110px;
+		min-width: 110px;
+	}
+
+	#haproxy-batch-modal .hb-tip {
+		font-size: 12px;
+		opacity: 0.75;
+		padding-bottom: 8px;
+	}
+
+	#haproxy-batch-modal .hb-foot {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 8px;
+		border-top: 1px solid #ccc;
+		padding-top: 10px;
+	}
+
+	#haproxy-batch-modal .hb-foot .hb-btns {
+		display: flex;
+		gap: 8px;
+	}
+
+	#haproxy-batch-modal .hb-count {
+		color: #2096d1;
+		font-weight: 600;
+	}
+
+	#cbi-<%=appname%>-haproxy_config .hb-col-check {
+		width: 34px;
+		min-width: 34px;
+		text-align: center;
+		padding-left: 4px;
+		padding-right: 4px;
+	}
+
+	@media screen and (max-width: 1152px) {
+		#cbi-<%=appname%>-haproxy_config .cbi-section-table-row .hb-col-check {
+			flex: 0 0 34px;
+			min-width: 34px;
+		}
+	}
+</style>
+
+<div id="haproxy-batch-mask"></div>
+
+<div id="haproxy-batch-modal">
+	<div class="hb-title">
+		<%:Batch Add Nodes%>
+		<input class="btn cbi-button" type="button" value="X" onclick="haproxy_batch.close()" />
+	</div>
+	<div class="hb-search">
+		<input type="text" id="haproxy-batch-search" placeholder="<%:Search nodes...%>" />
+		<input class="btn cbi-button cbi-button-add" type="button" value="<%:Select all search results%>" onclick="haproxy_batch.select_searched()" />
+	</div>
+	<div class="hb-list" id="haproxy-batch-list"></div>
+	<div class="hb-params">
+		<div class="hb-param"><b><%:Haproxy Port%></b><input type="text" id="haproxy-batch-port" /></div>
+		<div class="hb-param"><b><%:Node Weight%></b><input type="text" id="haproxy-batch-weight" value="5" /></div>
+		<div class="hb-param"><b><%:Mode%></b>
+			<select id="haproxy-batch-mode">
+				<option value="0"><%:Primary%></option>
+				<option value="1"><%:Standby%></option>
+			</select>
+		</div>
+	</div>
+	<div class="hb-tip"><%:The port defaults to inheriting from the last row. Nodes in the same group need to use the same port.%></div>
+	<div class="hb-foot">
+		<span><%:Selected%> <span class="hb-count" id="haproxy-batch-count">0</span> <%:node(s)%></span>
+		<span class="hb-btns">
+			<input class="btn cbi-button cbi-button-add" type="button" id="haproxy-batch-submit" value="<%:Add%>" onclick="haproxy_batch.submit()" />
+			<input class="btn cbi-button cbi-button-reset" type="button" value="<%:Close%>" onclick="haproxy_batch.close()" />
+		</span>
+	</div>
+</div>
+
+<script type="text/javascript">
+//<![CDATA[
+var haproxy_batch = (function () {
+	var appname = "<%=appname%>";
+	var SECTION_ID_PREFIX = "cbi-" + appname + "-";
+	var CONTAINER_ID = "cbi-" + appname + "-haproxy_config";
+	var DEFAULT_PORT = "1181";
+	var DEFAULT_WEIGHT = "5";
+
+	var URL_ADD = '<%=api.url("haproxy_batch_add")%>';
+	var URL_DEL = '<%=api.url("haproxy_batch_del")%>';
+	var URL_CLEAR = '<%=api.url("haproxy_clear_nodes")%>';
+	var TOKEN = '<%=token%>';
+
+	var MSG = {
+		added: "<%:Added%>",
+		selectAll: "<%:Select all%>",
+		noSelected: "<%:No nodes selected%>",
+		confirmDel: "<%:Are you sure to delete the selected nodes?%>",
+		confirmClear: "<%:Are you sure to clear all load balancing nodes?%>",
+		invalidParam: "<%:Invalid port or weight.%>",
+		nothingAdded: "<%:No nodes to add.%>",
+		processing: "<%:Processing, please wait…%>",
+		error: "<%:Error%>"
+	};
+
+	/* 服务端注入数据（haproxy.lua 组装）；空表可能被序列化为 "{}"，统一防御 */
+	var NODES = <%=self.nodes_json%>;
+	var EXISTING = <%=self.existing_json%>;
+	if (!Array.isArray(NODES)) NODES = [];
+	if (!Array.isArray(EXISTING)) EXISTING = [];
+	var existingSet = {};
+	EXISTING.forEach(function (id) { existingSet[id] = true; });
+
+	function $(id) { return document.getElementById(id); }
+	function getContainer() { return $(CONTAINER_ID); }
+
+	/* 仅在 token 非空时附加，避免覆盖新版 LuCI 自动附加的 CSRF token */
+	function withToken(params) {
+		if (TOKEN) params.token = TOKEN;
+		return params;
+	}
+
+	function esc(s) {
+		return String(s).replace(/[&<>"']/g, function (c) {
+			return { "&": "\u0026amp;", "<": "\u0026lt;", ">": "\u0026gt;", '"': "\u0026quot;", "'": "\u0026#39;" }[c];
+		});
+	}
+
+	/* 取背景色，使弹窗适配亮/暗主题（与 node_list 相同方式） */
+	function getBg(el) {
+		if (!el) return null;
+		var style = window.getComputedStyle(el);
+		var bgImage = style.backgroundImage;
+		var bgColor = style.backgroundColor;
+		return (bgImage !== "none" || !/rgba\([^,]+,[^,]+,[^,]+,\s*0\)/.test(bgColor) && bgColor !== "transparent")
+			? style.background
+			: null;
+	}
+
+	function dataRows() {
+		var c = getContainer();
+		if (!c) return [];
+		return Array.prototype.slice.call(c.querySelectorAll("tr.cbi-section-table-row")).filter(function (tr) {
+			return tr.id && tr.id.indexOf(SECTION_ID_PREFIX) === 0;
+		});
+	}
+	function rowSid(tr) { return tr.id.substring(SECTION_ID_PREFIX.length); }
+
+	/* ===== processing 遮罩 ===== */
+	function showProcessing() {
+		var mask = $("haproxy-batch-mask");
+		mask.innerHTML = '<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;">' + MSG.processing + "</div>";
+		mask.style.display = "block";
+	}
+	function hideProcessing() {
+		var mask = $("haproxy-batch-mask");
+		mask.style.display = "none";
+		mask.innerHTML = "";
+	}
+
+	/* ===== 批量添加弹窗 ===== */
+	var modalEl = $("haproxy-batch-modal");
+	var maskEl = $("haproxy-batch-mask");
+	var listEl = $("haproxy-batch-list");
+	var searchEl = $("haproxy-batch-search");
+	var portEl = $("haproxy-batch-port");
+	var weightEl = $("haproxy-batch-weight");
+	var modeEl = $("haproxy-batch-mode");
+	var countEl = $("haproxy-batch-count");
+	var submitBtn = $("haproxy-batch-submit");
+
+	function defaultPort() {
+		var rows = dataRows();
+		for (var i = rows.length - 1; i >= 0; i--) {
+			var input = rows[i].querySelector('input[name$=".haproxy_port"]');
+			if (input && input.value) return input.value;
+		}
+		return DEFAULT_PORT;
+	}
+
+	function renderGroups() {
+		var groups = [];
+		var index = {};
+		NODES.forEach(function (n) {
+			var g = n.group || "default";
+			if (index[g] === undefined) {
+				index[g] = groups.length;
+				groups.push({ name: g, nodes: [] });
+			}
+			groups[index[g]].nodes.push(n);
+		});
+
+		var html = "";
+		groups.forEach(function (g, gi) {
+			html += '<div class="hb-group" data-gi="' + gi + '">'
+				+ '<div class="hb-group-head">'
+				+ '<span class="hb-chev closed"></span>'
+				+ '<input type="checkbox" title="' + MSG.selectAll + '" />'
+				+ "<b>" + esc(g.name) + "</b>"
+				+ '<span class="hb-cnt"></span>'
+				+ '</div><ul class="hb-group-nodes">';
+			g.nodes.forEach(function (n) {
+				var added = !!existingSet[n.id];
+				html += '<li class="' + (added ? "hb-added" : "") + '"'
+					+ ' data-id="' + esc(n.id) + '"'
+					+ ' data-name="' + esc((n.label || "").toLowerCase()) + '">'
+					+ '<input type="checkbox"' + (added ? " disabled" : "") + " />"
+					+ '<span class="hb-label" title="' + esc(n.label) + '">' + esc(n.label) + "</span>"
+					+ (added ? '<span class="hb-added-badge">' + MSG.added + "</span>" : "")
+					+ "</li>";
+			});
+			html += "</ul></div>";
+		});
+		listEl.innerHTML = html;
+		refreshCounts();
+	}
+
+	function toggleGroup(grp) {
+		var ul = grp.querySelector("ul.hb-group-nodes");
+		var chev = grp.querySelector(".hb-chev");
+		var open = ul.style.display === "block";
+		ul.style.display = open ? "none" : "block";
+		if (chev) chev.classList.toggle("closed", open);
+	}
+
+	function refreshCounts() {
+		var total = 0;
+		listEl.querySelectorAll(".hb-group").forEach(function (grp) {
+			var sel = 0, add = 0, chk = 0;
+			grp.querySelectorAll("ul.hb-group-nodes li").forEach(function (li) {
+				if (li.classList.contains("hb-added")) add++;
+				else {
+					chk++;
+					if (li.querySelector("input").checked) sel++;
+				}
+			});
+			total += sel;
+			var headCheck = grp.querySelector(".hb-group-head input");
+			headCheck.checked = (chk > 0 && sel === chk);
+			headCheck.indeterminate = (sel > 0 && sel < chk);
+			grp.querySelector(".hb-cnt").textContent = "(" + sel + "/" + (chk + add) + ")";
+		});
+		countEl.textContent = total;
+		submitBtn.disabled = (total === 0);
+	}
+
+	/* 弹窗列表事件（委托，避免重复绑定） */
+	listEl.addEventListener("click", function (e) {
+		var t = e.target;
+		if (t.tagName === "INPUT") return; /* 复选框由 change 事件处理 */
+		var head = t.closest(".hb-group-head");
+		if (head) {
+			if (t.closest(".hb-chev") || t.tagName === "B") toggleGroup(head.closest(".hb-group"));
+			return;
+		}
+		var li = t.closest("ul.hb-group-nodes li");
+		if (li && !li.classList.contains("hb-added")) {
+			var c = li.querySelector("input");
+			if (c) { c.checked = !c.checked; refreshCounts(); }
+		}
+	});
+	listEl.addEventListener("change", function (e) {
+		var t = e.target;
+		if (t.tagName !== "INPUT") return;
+		var head = t.closest(".hb-group-head");
+		if (head) {
+			var grp = head.closest(".hb-group");
+			var state = t.checked;
+			grp.querySelectorAll("ul.hb-group-nodes li:not(.hb-added) input").forEach(function (c) {
+				c.checked = state;
+			});
+		}
+		refreshCounts();
+	});
+	searchEl.addEventListener("input", function () {
+		var q = searchEl.value.trim().toLowerCase();
+		listEl.querySelectorAll(".hb-group").forEach(function (grp) {
+			var matched = 0;
+			grp.querySelectorAll("ul.hb-group-nodes li").forEach(function (li) {
+				var hit = (!q) || (li.getAttribute("data-name") || "").indexOf(q) > -1;
+				li.style.display = hit ? "flex" : "none";
+				if (hit) matched++;
+			});
+			grp.style.display = (!q || matched > 0) ? "block" : "none";
+			var ul = grp.querySelector("ul.hb-group-nodes");
+			var chev = grp.querySelector(".hb-chev");
+			if (q && matched > 0) { ul.style.display = "block"; if (chev) chev.classList.remove("closed"); }
+			if (!q) { ul.style.display = "none"; if (chev) chev.classList.add("closed"); }
+		});
+	});
+
+	function open() {
+		renderGroups();
+		searchEl.value = "";
+		portEl.value = defaultPort();
+		weightEl.value = DEFAULT_WEIGHT;
+		maskEl.style.display = "block";
+		modalEl.style.background = getBg(document.querySelector(".cbi-section")) || getBg(document.body) || "";
+		modalEl.style.display = "block";
+		document.body.classList.add("modal-open");
+	}
+
+	function close() {
+		maskEl.style.display = "none";
+		modalEl.style.display = "none";
+		document.body.classList.remove("modal-open");
+	}
+
+	function select_searched() {
+		var n = 0;
+		listEl.querySelectorAll("ul.hb-group-nodes li").forEach(function (li) {
+			if (li.style.display !== "none" && !li.classList.contains("hb-added")) {
+				li.querySelector("input").checked = true;
+				n++;
+			}
+		});
+		refreshCounts();
+		if (!n) alert(MSG.noSelected);
+	}
+
+	function submit() {
+		var ids = [];
+		listEl.querySelectorAll("ul.hb-group-nodes li:not(.hb-added)").forEach(function (li) {
+			if (li.querySelector("input").checked) ids.push(li.getAttribute("data-id"));
+		});
+		if (!ids.length) { alert(MSG.noSelected); return; }
+		var port = parseInt(portEl.value, 10);
+		var weight = parseInt(weightEl.value, 10);
+		if (!(port >= 1 && port <= 65535) || !(weight >= 1)) { alert(MSG.invalidParam); return; }
+		close();
+		showProcessing();
+		XHR.post(URL_ADD, withToken({
+			ids: ids.join(","),
+			haproxy_port: String(port),
+			lbweight: String(weight),
+			backup: modeEl.value
+		}), function (x, data) {
+			if (x && x.status == 200 && data) {
+				if (!data.added) {
+					hideProcessing();
+					alert(MSG.nothingAdded);
+					return;
+				}
+				window.location.reload();
+			} else {
+				hideProcessing();
+				alert(MSG.error);
+			}
+		});
+	}
+
+	/* ===== 批量删除 / 清空 ===== */
+	function delete_selected() {
+		var sids = [];
+		dataRows().forEach(function (tr) {
+			var c = tr.querySelector(".hb-row-check");
+			if (c && c.checked) sids.push(rowSid(tr));
+		});
+		if (!sids.length) { alert(MSG.noSelected); return; }
+		if (!confirm(MSG.confirmDel)) return;
+		showProcessing();
+		XHR.post(URL_DEL, withToken({ ids: sids.join(",") }), function (x, data) {
+			if (x && x.status == 200 && data) {
+				window.location.reload();
+			} else {
+				hideProcessing();
+				alert(MSG.error);
+			}
+		});
+	}
+
+	function clear_all() {
+		if (!dataRows().length) return;
+		if (!confirm(MSG.confirmClear)) return;
+		showProcessing();
+		XHR.post(URL_CLEAR, withToken({}), function (x, data) {
+			if (x && x.status == 200 && data) {
+				window.location.reload();
+			} else {
+				hideProcessing();
+				alert(MSG.error);
+			}
+		});
+	}
+
+	/* ===== 表格复选框列注入 ===== */
+	function refresh_sel_all() {
+		var selAll = $("haproxy-batch-sel-all");
+		if (!selAll) return;
+		var boxes = [];
+		dataRows().forEach(function (tr) {
+			var c = tr.querySelector(".hb-row-check");
+			if (c) boxes.push(c);
+		});
+		var n = 0;
+		boxes.forEach(function (c) { if (c.checked) n++; });
+		selAll.checked = (boxes.length > 0 && n === boxes.length);
+		selAll.indeterminate = (n > 0 && n < boxes.length);
+	}
+
+	function inject_check_column() {
+		var container = getContainer();
+		if (!container) return false;
+
+		var titles = container.querySelector("tr.cbi-section-table-titles");
+		if (titles && !titles._hbInited) {
+			var th = document.createElement("th");
+			th.className = "th cbi-section-table-cell hb-col-check";
+			var selAll = document.createElement("input");
+			selAll.type = "checkbox";
+			selAll.id = "haproxy-batch-sel-all";
+			selAll.title = MSG.selectAll;
+			selAll.onclick = function (e) { e.stopPropagation(); };
+			selAll.onchange = function () {
+				dataRows().forEach(function (tr) {
+					var c = tr.querySelector(".hb-row-check");
+					if (c) c.checked = selAll.checked;
+				});
+			};
+			th.appendChild(selAll);
+			titles.insertBefore(th, titles.firstChild);
+			titles._hbInited = true;
+		}
+
+		dataRows().forEach(function (tr) {
+			if (tr._hbInited) return;
+			var td = document.createElement("td");
+			td.className = "td cbi-value-field hb-col-check";
+			var c = document.createElement("input");
+			c.type = "checkbox";
+			c.className = "hb-row-check";
+			c.onclick = function (e) { e.stopPropagation(); };
+			c.onchange = refresh_sel_all;
+			td.appendChild(c);
+			tr.insertBefore(td, tr.firstChild);
+			tr._hbInited = true;
+		});
+		refresh_sel_all();
+		return true;
+	}
+
+	/* ===== 按钮注入（Add 按钮所在创建区） ===== */
+	function inject_buttons() {
+		var container = getContainer();
+		if (!container) return false;
+		if (container._hbBtnsInited) return true;
+
+		var create = container.querySelector(".cbi-section-create") || container;
+		[["<%:Batch Add Nodes%>", "cbi-button-add", open],
+			["<%:Delete Selected%>", "cbi-button-remove", delete_selected],
+			["<%:Clear Node List%>", "cbi-button-remove", clear_all]
+		].forEach(function (it) {
+			var btn = document.createElement("input");
+			btn.type = "button";
+			btn.className = "btn cbi-button " + it[1];
+			btn.value = it[0];
+			btn.onclick = it[2];
+			create.appendChild(btn);
+		});
+		container._hbBtnsInited = true;
+		return true;
+	}
+
+	/* ===== 初始化（轮询等待 CBI 表格渲染，兼容 JS 版 LuCI 动态渲染） ===== */
+	var booted = false;
+	var initTimer = setInterval(function () {
+		if (booted) { clearInterval(initTimer); return; }
+		if (inject_buttons() && inject_check_column()) {
+			booted = true;
+			startObserver();
+		}
+	}, 400);
+	setTimeout(function () { clearInterval(initTimer); }, 20000);
+
+	/* 监听表格行变化（JS 版 LuCI 下 Add 动态加行时补充注入复选框） */
+	function startObserver() {
+		if (typeof MutationObserver === "undefined") return;
+		var container = getContainer();
+		if (!container) return;
+		var deb = null;
+		var obs = new MutationObserver(function () {
+			if (deb) return;
+			deb = setTimeout(function () {
+				deb = null;
+				inject_check_column();
+			}, 300);
+		});
+		obs.observe(container, { childList: true, subtree: true });
+	}
+
+	return {
+		open: open,
+		close: close,
+		submit: submit,
+		select_searched: select_searched,
+		delete_selected: delete_selected,
+		clear_all: clear_all
+	};
+})();
+//]]>
+</script>

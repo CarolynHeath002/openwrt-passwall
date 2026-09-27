@@ -2168,3 +2168,42 @@ msgstr "配置支持的密码套件列表，以冒号 (:) 分隔。"
 
 msgid "Connection Reuse"
 msgstr "连接复用"
+
+msgid "Batch Add Nodes"
+msgstr "批量添加节点"
+
+msgid "Delete Selected"
+msgstr "删除选中"
+
+msgid "Clear Node List"
+msgstr "清空节点列表"
+
+msgid "Added"
+msgstr "已添加"
+
+msgid "Select all search results"
+msgstr "选中搜索结果全部"
+
+msgid "Selected"
+msgstr "已选"
+
+msgid "node(s)"
+msgstr "个节点"
+
+msgid "No nodes selected"
+msgstr "未选择任何节点"
+
+msgid "Are you sure to delete the selected nodes?"
+msgstr "确定要删除选中的节点吗？"
+
+msgid "Are you sure to clear all load balancing nodes?"
+msgstr "确定要清空所有负载均衡节点吗？"
+
+msgid "The port defaults to inheriting from the last row. Nodes in the same group need to use the same port."
+msgstr "端口默认继承最后一行；同一组的负载均衡节点需要使用相同端口。"
+
+msgid "Invalid port or weight."
+msgstr "端口或权重输入无效。"
+
+msgid "No nodes to add."
+msgstr "没有新节点被添加（可能均已存在于列表中）。"
