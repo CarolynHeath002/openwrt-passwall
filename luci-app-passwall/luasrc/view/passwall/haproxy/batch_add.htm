@@ -212,6 +212,16 @@ local appname = map.config
 		padding-right: 4px;
 	}
 
+	#cbi-<%=appname%>-haproxy_config .cbi-section-create {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 12px;
+	}
+
+	#cbi-<%=appname%>-haproxy_config .cbi-section-create .cbi-button {
+		margin: 0;
+	}
+
 	@media screen and (max-width: 1152px) {
 		#cbi-<%=appname%>-haproxy_config .cbi-section-table-row .hb-col-check {
 			flex: 0 0 34px;
